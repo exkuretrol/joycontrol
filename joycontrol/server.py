@@ -51,6 +51,18 @@ async def create_hid_server(protocol_factory, ctl_psm=17, itr_psm=19, device_id=
     #    await hid.set_address("94:58:CB" + bt_addr[8:], interactive=interactive)
     #    bt_addr = hid.get_address()
 
+    # Normalize reconnect_bt_addr. The CLI default is 'auto', so the most
+    # common case is "reconnect if a Switch is paired, otherwise fall through
+    # to initial-pairing flow". Treat an empty string or 'none' as an explicit
+    # opt-out from reconnect.
+    if isinstance(reconnect_bt_addr, str):
+        normalized = reconnect_bt_addr.strip().lower()
+        if normalized in ('', 'none'):
+            reconnect_bt_addr = None
+        elif normalized == 'auto' and not hid.get_paired_switches():
+            logger.info('no paired Switch found; falling back to initial pairing flow')
+            reconnect_bt_addr = None
+
     if reconnect_bt_addr is None:
         if interactive:
             if len(hid.get_UUIDs()) > 3:
