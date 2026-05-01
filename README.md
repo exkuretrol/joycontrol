@@ -15,84 +15,148 @@ Emulation of JOYCON_R, JOYCON_L and PRO_CONTROLLER. Able to send:
 ## Installation
 
 Tested on Python 3.9+ and BlueZ 5.55+ (verified on Raspbian and Oracle
-Linux 10 with Python 3.12 / BlueZ 5.83). The legacy `hciconfig` /
+Linux 10.1 with Python 3.12 / BlueZ 5.83). The legacy `hciconfig` /
 `hcitool` tools are deprecated on modern distributions; this project
-prefers `btmgmt` (part of `bluez-tools`) and falls back to the legacy
-tools only when present.
+prefers `btmgmt` (the modern bluez management tool) and falls back to
+the legacy tools only when present.
 
-### System packages
+These steps assume a fresh setup. Run them in order. Everything below
+is reversible — nothing is installed system-wide except a few distro
+packages and a systemd drop-in (covered in *Bluetooth service setup*
+below).
 
-Debian / Ubuntu / Raspbian:
+### Step 1 — Get the source
+
 ```bash
-sudo apt install python3-dbus libhidapi-hidraw0 libbluetooth-dev bluez bluez-tools
+git clone https://github.com/Poohl/joycontrol.git
+cd joycontrol
 ```
 
-Fedora / RHEL / Oracle Linux:
+(Substitute your own fork URL if you're using one.)
+
+### Step 2 — Install the system packages
+
+joycontrol talks to BlueZ over D-Bus and reads HID devices via HIDAPI,
+so a few distro packages have to be present. This step is the only one
+that needs to touch system state outside the project directory.
+
+**Debian / Ubuntu / Raspberry Pi OS (Raspbian):**
+
 ```bash
-sudo dnf install python3-dbus hidapi bluez bluez-libs-devel
+sudo apt update
+sudo apt install python3-venv python3-dbus libhidapi-hidraw0 libbluetooth-dev bluez bluez-tools
 ```
 
-On RHEL-family distros `btmgmt` ships *inside* the main `bluez` package,
-so there's no separate `bluez-tools`.
+**Fedora / RHEL / Oracle Linux 10:**
 
-`bluez-libs-devel` lives in the CodeReady Builder repo, which is not
-enabled by default. Enable it first if `dnf` can't find the package:
+`bluez-libs-devel` lives in the **CodeReady Builder** repo, which is
+disabled by default — enable it once with the line that matches your
+distro:
 
 ```bash
 # Oracle Linux 10
 sudo dnf config-manager --enable ol10_codeready_builder
 
-# RHEL 10 (with a Red Hat subscription)
-sudo subscription-manager repos --enable codeready-builder-for-rhel-10-x86_64-rpms
-
 # AlmaLinux / Rocky Linux 10
 sudo dnf config-manager --set-enabled crb
+
+# Red Hat Enterprise Linux 10 (with an active subscription)
+sudo subscription-manager repos --enable codeready-builder-for-rhel-10-x86_64-rpms
 ```
 
-Adjust the version number (`ol10_…`, `…rhel-10-…`) for your release.
+Then install the packages:
 
-On Debian/Ubuntu, `btmgmt` is shipped as the separate `bluez-tools`
-package (already in the apt line above). Either way, joycontrol's
-modernized adapter code uses `btmgmt` as the default replacement for
-the deprecated `hciconfig` / `hcitool`.
+```bash
+sudo dnf install python3 python3-dbus hidapi bluez bluez-libs-devel
+```
 
-### Python packages
+> **Why no `bluez-tools`?** On Debian-family distros, `btmgmt` ships in
+> a separate `bluez-tools` package; on RHEL-family distros it lives
+> *inside* the main `bluez` package. Either way, you end up with
+> `btmgmt` available — that's what joycontrol uses.
 
-joycontrol uses `python3-dbus` from the distro (it links against
-system libraries — pip-building it from source is painful and needs a
-C toolchain plus dbus/glib headers). The recommended setup is a
-project-local venv that inherits the system's dbus binding:
+### Step 3 — Create a Python virtualenv
+
+A virtualenv keeps the project's Python dependencies isolated from
+the rest of your system so they don't conflict with anything else.
+
+From the cloned project directory, run:
 
 ```bash
 python3 -m venv --system-site-packages .venv
+```
+
+This creates a `.venv/` folder inside the project. The
+`--system-site-packages` flag is **important**: it lets the venv see
+the distro-installed `python3-dbus` from step 2.
+
+> **Why `--system-site-packages`?** `python3-dbus` is a C extension
+> that links against your system's D-Bus libraries. Building it from
+> source via `pip` requires a C toolchain plus dbus/glib headers, and
+> usually fails. Having the venv inherit the distro package
+> sidesteps that whole problem.
+
+### Step 4 — Install joycontrol
+
+This installs the joycontrol package and its remaining Python
+dependencies (`hid`, `crc8`, `prompt-toolkit`) *into* the venv:
+
+```bash
 sudo .venv/bin/pip install .
 ```
 
-`--system-site-packages` is what makes the system `python3-dbus`
-visible inside the venv. Without it, `import dbus` will fail.
+`sudo` is needed here only because the next step (running joycontrol)
+must be root to access raw Bluetooth sockets, and the venv files
+should be readable by root.
 
-If you'd rather install system-wide (no venv):
+### Step 5 — Verify the install
 
-```bash
-sudo pip3 install .
-```
-
-joycontrol must run as root (raw L2CAP sockets), so install where the
-root user can find the packages — either system-wide or in a venv
-that you'll launch via `sudo .venv/bin/python ...`.
-
-To verify the install:
 ```bash
 sudo .venv/bin/python -c "import dbus, hid, crc8, prompt_toolkit"
 ```
-Should exit silently.
+
+Should print nothing and exit cleanly. If you get
+`ModuleNotFoundError: No module named 'dbus'`, you forgot
+`--system-site-packages` in step 3 — delete `.venv/` and redo step 3.
+
+---
+
+After these five steps the Python side is done. You **also** need to
+adjust BlueZ so the Switch will accept connections — that's the next
+section. Without that, the script will start but the Switch will
+reject the controller during pairing.
 
 ## Bluetooth service setup
 
-The Switch refuses to connect if the adapter advertises non-controller
-profiles like AVRCP — you need to disable the `input`, `sap`, and
-`avrcp` plugins on `bluetoothd`. The maintainable way is a systemd
-drop-in (won't be clobbered by package upgrades):
+The Switch is picky about what it connects to. If the host advertises
+extra Bluetooth profiles (audio remote, SIM access, regular HID
+input), the Switch sees too many service records and **refuses to
+pair**. We tell BlueZ to drop those plugins so the controller is the
+only thing the Switch sees.
+
+The cleanest way is a **systemd drop-in override** — a small
+configuration file that adjusts the existing `bluetooth.service`
+without touching anything BlueZ ships, so it survives package updates.
+
+### Step 1 — Find your bluetoothd binary path
+
+```bash
+systemctl cat bluetooth.service | grep -m1 ExecStart=/usr
+```
+
+You'll see one of these two paths in the output:
+
+| Distro family                | `bluetoothd` path                       |
+|------------------------------|-----------------------------------------|
+| Fedora / RHEL / Oracle Linux | `/usr/libexec/bluetooth/bluetoothd`     |
+| Debian / Ubuntu / Raspbian   | `/usr/lib/bluetooth/bluetoothd`         |
+
+Note which one you have — you'll plug it into the next step.
+
+### Step 2 — Write the override
+
+Replace `/usr/libexec/bluetooth/bluetoothd` below with the path you
+found in step 1 if yours differs:
 
 ```bash
 sudo mkdir -p /etc/systemd/system/bluetooth.service.d
@@ -101,40 +165,62 @@ sudo tee /etc/systemd/system/bluetooth.service.d/override.conf >/dev/null <<'EOF
 ExecStart=
 ExecStart=/usr/libexec/bluetooth/bluetoothd -C -P sap,input,avrcp
 EOF
+```
+
+The blank `ExecStart=` line is important — it tells systemd to discard
+BlueZ's default command before applying ours.
+
+### Step 3 — Reload and restart bluetoothd
+
+```bash
 sudo systemctl daemon-reload
 sudo systemctl restart bluetooth.service
 ```
 
-The `bluetoothd` binary path differs by distro:
-- `/usr/libexec/bluetooth/bluetoothd` — Fedora / RHEL family
-- `/usr/lib/bluetooth/bluetoothd`     — Debian / Ubuntu / Raspbian
+### Step 4 — Verify
 
-Check yours and adjust the override if needed:
 ```bash
-systemctl cat bluetooth.service | grep -m1 ExecStart=/usr
+ps -ef | grep bluetoothd | grep -v grep
 ```
 
-Verify the right flags are in effect:
-```bash
-ps -ef | grep bluetoothd
-# ... /usr/libexec/bluetooth/bluetoothd -C -P sap,input,avrcp
+You should see the daemon running with the `-C -P sap,input,avrcp`
+flags appended, e.g.:
+
 ```
+root  7274  ... /usr/libexec/bluetooth/bluetoothd -C -P sap,input,avrcp
+```
+
+Confirm there's a working adapter too (especially if you're inside a
+VM — the host might have Bluetooth, but the VM might not):
+
+```bash
+bluetoothctl show
+```
+
+You want a `Controller` line with a real BD address (e.g. `5C:F3:70:…`).
+If you don't, joycontrol won't be able to do anything until you fix
+the adapter situation — typically by passing through a USB Bluetooth
+dongle or running on bare metal.
 
 ### What this breaks (host-wide)
-- `input` — disables Bluetooth keyboards / mice / joysticks on this host.
-- `sap`   — SIM Access Profile (rarely used).
-- `avrcp` — media remote control (e.g. play/pause from BT headphones).
 
-For *reconnecting* to an already-paired Switch you can sometimes get
-away with only disabling `input`, but **initial pairing** needs all
-three or the Switch sees too many SDP records and refuses (see
-[Issue #4](https://github.com/Poohl/joycontrol/issues/4)).
+The override disables three BlueZ plugins for *everything* on this
+machine, not just joycontrol. After applying it:
 
-### Make sure the adapter actually exists
+- `input` — Bluetooth keyboards / mice / game controllers won't work.
+- `sap`   — SIM Access Profile (used to share a phone's SIM with a
+  car kit) won't work; almost certainly nobody cares.
+- `avrcp` — media remote control over Bluetooth (play/pause from BT
+  headphones, etc.) won't work.
 
-If running in a VM, the host might have Bluetooth but the VM might
-not. Confirm with `bluetoothctl show` — you want to see a `Controller`
-line with a real BD address.
+For *reconnecting* to a Switch you've already paired with, you can
+sometimes get away with disabling only `input`. But **initial pairing
+needs all three** disabled or the Switch refuses the connection. See
+[Issue #4](https://github.com/Poohl/joycontrol/issues/4) for the
+underlying details.
+
+To revert: delete `/etc/systemd/system/bluetooth.service.d/override.conf`
+and restart bluetooth.service.
 
 ## Command line interface example
 
