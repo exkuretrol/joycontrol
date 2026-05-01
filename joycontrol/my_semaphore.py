@@ -1,9 +1,12 @@
 import asyncio
 
 class _Request:
-    def __init__(self, value, loop):
+    def __init__(self, value):
         self.value = value
-        self.future = loop.create_future()
+        # Use the currently running loop. asyncio.Semaphore no longer exposes
+        # `self._loop` on Python 3.10+, and even when it did, get_running_loop()
+        # is the supported way to obtain a loop from inside a coroutine.
+        self.future = asyncio.get_running_loop().create_future()
 
 
 class MySemaphore(asyncio.Semaphore):
@@ -28,7 +31,7 @@ class MySemaphore(asyncio.Semaphore):
         if count < 0:
             raise ValueError("Semaphore acquire with count < 0")
         while self._value < count:
-            r = _Request(count, self._loop)
+            r = _Request(count)
             self._waiters.append(r)
             try:
                 await r.future
