@@ -33,6 +33,20 @@ def _make_session(words):
     )
 
 
+async def wait_for_enter(message: str = '') -> None:
+    """
+    Block until the user presses enter (or sends EOF / Ctrl-C). Replaces
+    aioconsole.ainput inside the CLI so we don't end up with two competing
+    stdin readers — that mix caused the `mash` stop-on-enter to hang under
+    prompt_toolkit's terminal mode.
+    """
+    session = PromptSession(message=message)
+    try:
+        await session.prompt_async()
+    except (EOFError, KeyboardInterrupt):
+        return
+
+
 def _print_doc(string):
     """
     Attempts to remove common white space at the start of the lines in a doc string

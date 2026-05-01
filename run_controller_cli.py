@@ -5,11 +5,9 @@ import asyncio
 import logging
 import os
 
-from aioconsole import ainput
-
 import joycontrol.debug as debug
 from joycontrol import logging_default as log, utils
-from joycontrol.command_line_interface import ControllerCLI
+from joycontrol.command_line_interface import ControllerCLI, wait_for_enter
 from joycontrol.controller import Controller
 from joycontrol.controller_state import ControllerState, button_push, button_press, button_release
 from joycontrol.memory import FlashMemory
@@ -67,7 +65,7 @@ async def test_controller_buttons(controller_state: ControllerState):
     # waits until controller is fully connected
     await controller_state.connect()
 
-    await ainput(prompt='Make sure the Switch is in the Home menu and press <enter> to continue.')
+    await wait_for_enter('Make sure the Switch is in the Home menu and press <enter> to continue.')
 
     """
     # We assume we are in the "Change Grip/Order" menu of the switch
@@ -119,19 +117,22 @@ async def test_controller_buttons(controller_state: ControllerState):
         button_list.remove('home')
 
     user_input = asyncio.ensure_future(
-        ainput(prompt='Pressing all buttons... Press <enter> to stop.')
+        wait_for_enter('Pressing all buttons... Press <enter> to stop.')
     )
 
     # push all buttons consecutively until user input
     while not user_input.done():
         for button in button_list:
             await button_push(controller_state, button)
-            await asyncio.sleep(0.1)
-
-            if user_input.done():
+            try:
+                # race the inter-button delay against the stop signal so
+                # Enter takes effect within ~0.1s instead of after the loop.
+                await asyncio.wait_for(asyncio.shield(user_input), timeout=0.1)
                 break
+            except asyncio.TimeoutError:
+                pass
 
-    # await future to trigger exceptions in case something went wrong
+    # await future to surface any exceptions
     await user_input
 
     # go back to home
@@ -155,14 +156,21 @@ async def mash_button(controller_state, button, interval):
     ensure_valid_button(controller_state, button)
 
     user_input = asyncio.ensure_future(
-        ainput(prompt=f'Pressing the {button} button every {interval} seconds... Press <enter> to stop.')
+        wait_for_enter(f'Pressing the {button} button every {interval} seconds... Press <enter> to stop.')
     )
-    # push a button repeatedly until user input
+    interval_s = float(interval)
+    # push a button repeatedly, but race the interval sleep against the
+    # stop signal so Enter takes effect immediately instead of after the
+    # next interval elapses.
     while not user_input.done():
         await button_push(controller_state, button)
-        await asyncio.sleep(float(interval))
+        try:
+            await asyncio.wait_for(asyncio.shield(user_input), timeout=interval_s)
+            break
+        except asyncio.TimeoutError:
+            pass
 
-    # await future to trigger exceptions in case something went wrong
+    # await future to surface any exceptions
     await user_input
 
 def _register_commands_with_controller_state(controller_state, cli):
