@@ -268,7 +268,12 @@ class ControllerProtocol(BaseProtocol):
 
     def connection_lost(self, exc: Optional[Exception] = None) -> None:
         if self.transport is not None:
-            logger.error('Connection lost.')
+            # Per asyncio convention, exc=None means a clean shutdown.
+            # Anything else is unexpected.
+            if exc is None:
+                logger.info('Connection closed.')
+            else:
+                logger.error(f'Connection lost: {exc}')
             asyncio.ensure_future(self.transport.close())
             self.transport = None
 

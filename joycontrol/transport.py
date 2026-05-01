@@ -185,10 +185,10 @@ class L2CAP_Transport(asyncio.Transport):
             await self._loop.sock_sendall(self._itr_sock, _bytes)
         except OSError as err:
             logger.error(err)
-            self._protocol.connection_lost()
+            self._protocol.connection_lost(err)
         except ConnectionResetError as err:
             logger.error(err)
-            self._protocol.connection_lost()
+            self._protocol.connection_lost(err)
 
     async def writelines(*data):
         for d in data:
