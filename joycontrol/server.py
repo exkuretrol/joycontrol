@@ -137,7 +137,7 @@ async def create_hid_server(protocol_factory, ctl_psm=17, itr_psm=19, device_id=
             elif len(paths) > 1:
                 if interactive:
                     print("found the following paired switches, please choose one:")
-                    for i, p in paths.items():
+                    for i, p in enumerate(paths, start=1):
                         print(f" {i}: {p}")
                     choice = input(f"number 1 - {len(paths)} [1]:")
                     if not choice:
