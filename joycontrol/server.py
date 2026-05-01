@@ -149,19 +149,26 @@ async def create_hid_server(protocol_factory, ctl_psm=17, itr_psm=19, device_id=
             if not paths:
                 logger.fatal("couldn't find paired switch to reconnect to, terminating...")
                 exit(1)
-            elif len(paths) > 1:
+
+            # Sort by last bond mtime (most recent first) so option 1 is
+            # always the most recently used Switch.
+            def _bond_mtime(p):
+                addr = HidDevice.get_address_of_paired_path(p)
+                info_path = f"/var/lib/bluetooth/{bt_addr}/{addr}/info"
+                try:
+                    return os.path.getmtime(info_path)
+                except OSError:
+                    return 0.0
+
+            paths = sorted(paths, key=_bond_mtime, reverse=True)
+
+            if len(paths) > 1:
                 if interactive:
                     print("found the following paired switches, please choose one:")
                     for i, p in enumerate(paths, start=1):
-                        addr = HidDevice.get_address_of_paired_path(p)
-                        info_path = f"/var/lib/bluetooth/{bt_addr}/{addr}/info"
-                        try:
-                            ts = time.strftime(
-                                "%Y-%m-%d %H:%M:%S",
-                                time.localtime(os.path.getmtime(info_path)),
-                            )
-                        except OSError:
-                            ts = "unknown"
+                        mt = _bond_mtime(p)
+                        ts = (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mt))
+                              if mt > 0 else "unknown")
                         print(f" {i}: {p}  (last bond: {ts})")
                     print(" 0: abort")
                     choice = input(f"number 1 - {len(paths)}, 0 to abort [1]: ")
