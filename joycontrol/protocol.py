@@ -187,7 +187,10 @@ class ControllerProtocol(BaseProtocol):
             active_time = time.time() - last_send_time
             sleep_time = self.send_delay - active_time
             if sleep_time < 0:
-                logger.warning(f'Code is running {abs(sleep_time)} s too slow!')
+                # Only flag genuine stalls. Sub-100ms overruns are routine —
+                # mostly L2CAP flow-control waits and Linux scheduler jitter.
+                if abs(sleep_time) > 0.1:
+                    logger.warning(f'Code is running {abs(sleep_time):.3f} s too slow!')
                 sleep_time = 0
 
             try:
