@@ -23,6 +23,66 @@ async def _send_empty_input_reports(transport):
         await transport.write(report)
         await asyncio.sleep(1)
 
+
+def _resolve_auto(hid: HidDevice, adapter_addr: str, interactive: bool):
+    """
+    Resolve `-r auto` to either a concrete BD address (reconnect path) or
+    None (fall through to initial pairing). When interactive and at least
+    one Switch is paired, present a menu so the user can pick a paired
+    Switch, pair a new one, or abort.
+
+    :returns BD address string for reconnect, or None for initial pairing.
+    """
+    paths = hid.get_paired_switches()
+    if not paths:
+        logger.info('no paired Switch found; falling back to initial pairing flow')
+        return None
+
+    def bond_mtime(p):
+        addr = HidDevice.get_address_of_paired_path(p)
+        info_path = f"/var/lib/bluetooth/{adapter_addr}/{addr}/info"
+        try:
+            return os.path.getmtime(info_path)
+        except OSError:
+            return 0.0
+
+    paths = sorted(paths, key=bond_mtime, reverse=True)
+
+    if not interactive:
+        if len(paths) > 1:
+            logger.warning(f"Automatic reconnect address chose {paths[0]} out of {paths}")
+        else:
+            logger.info(f"auto detected paired switch {paths[0]}")
+        return HidDevice.get_address_of_paired_path(paths[0])
+
+    print("found the following paired switches, please choose one:")
+    for i, p in enumerate(paths, start=1):
+        mt = bond_mtime(p)
+        ts = (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mt))
+              if mt > 0 else "unknown")
+        print(f" {i}: {p}  (last bond: {ts})")
+    print(" n: pair a new Switch")
+    print(" 0: abort")
+    choice = input(f"number 1 - {len(paths)}, n to pair new, 0 to abort [1]: ").strip().lower()
+
+    if choice == '':
+        return HidDevice.get_address_of_paired_path(paths[0])
+    if choice in ('0', 'q'):
+        print("aborted")
+        sys.exit(0)
+    if choice in ('n', 'new'):
+        logger.info('user chose to pair a new Switch; falling through to initial pairing flow')
+        return None
+    try:
+        idx = int(choice)
+    except ValueError:
+        print(f"unrecognized choice {choice!r}, aborting")
+        sys.exit(1)
+    if not 1 <= idx <= len(paths):
+        print(f"choice {idx} out of range, aborting")
+        sys.exit(1)
+    return HidDevice.get_address_of_paired_path(paths[idx - 1])
+
 async def create_hid_server(protocol_factory, ctl_psm=17, itr_psm=19, device_id=None, reconnect_bt_addr=None,
                             capture_file=None, interactive=False):
     """
@@ -59,9 +119,8 @@ async def create_hid_server(protocol_factory, ctl_psm=17, itr_psm=19, device_id=
         normalized = reconnect_bt_addr.strip().lower()
         if normalized in ('', 'none'):
             reconnect_bt_addr = None
-        elif normalized == 'auto' and not hid.get_paired_switches():
-            logger.info('no paired Switch found; falling back to initial pairing flow')
-            reconnect_bt_addr = None
+        elif normalized == 'auto':
+            reconnect_bt_addr = _resolve_auto(hid, bt_addr, interactive)
 
     if reconnect_bt_addr is None:
         if interactive:
@@ -143,52 +202,9 @@ async def create_hid_server(protocol_factory, ctl_psm=17, itr_psm=19, device_id=
         hid.pairable(False)
 
     else:
-        if reconnect_bt_addr.lower() == 'auto':
-            paths = hid.get_paired_switches()
-            path = ""
-            if not paths:
-                logger.fatal("couldn't find paired switch to reconnect to, terminating...")
-                exit(1)
-
-            # Sort by last bond mtime (most recent first) so option 1 is
-            # always the most recently used Switch.
-            def _bond_mtime(p):
-                addr = HidDevice.get_address_of_paired_path(p)
-                info_path = f"/var/lib/bluetooth/{bt_addr}/{addr}/info"
-                try:
-                    return os.path.getmtime(info_path)
-                except OSError:
-                    return 0.0
-
-            paths = sorted(paths, key=_bond_mtime, reverse=True)
-
-            if len(paths) > 1:
-                if interactive:
-                    print("found the following paired switches, please choose one:")
-                    for i, p in enumerate(paths, start=1):
-                        mt = _bond_mtime(p)
-                        ts = (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mt))
-                              if mt > 0 else "unknown")
-                        print(f" {i}: {p}  (last bond: {ts})")
-                    print(" 0: abort")
-                    choice = input(f"number 1 - {len(paths)}, 0 to abort [1]: ")
-                    if not choice:
-                        path = paths[0]
-                    elif choice.strip() in ('0', 'q', 'Q'):
-                        print("aborted")
-                        sys.exit(0)
-                    else:
-                        path = paths[int(choice) - 1]
-                else:
-                    path = paths[0]
-                    logger.warning(f"Automatic reconnect address chose {path} out of {paths}")
-            else:
-                path = paths[0]
-                logger.info(f"auto detected paired switch {path}")
-            reconnect_bt_addr = hid.get_address_of_paired_path(path)
-        else:
-            # Todo: figure out if we're actually paired
-            pass
+        # reconnect_bt_addr is already a concrete address — _resolve_auto
+        # handled the 'auto' case earlier and either returned an address
+        # or None (which would have hit the if-None branch above).
         # Reconnection to reconnect_bt_addr
         client_ctl = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
         client_itr = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
