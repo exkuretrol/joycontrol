@@ -224,14 +224,24 @@ and restart bluetooth.service.
 
 ## Command line interface example
 
-A simple CLI lives in `run_controller_cli.py`. Bare invocation:
+A simple CLI lives in `run_controller_cli.py`. All commands below
+assume you're in the project directory and have set up the venv as
+described in *Installation*:
 
 ```bash
-sudo python3 run_controller_cli.py
+cd /path/to/joycontrol   # the directory you cloned into
+```
+
+Bare invocation:
+
+```bash
+sudo .venv/bin/python run_controller_cli.py
 ```
 
 …defaults to emulating a Pro Controller and reconnecting to your most
 recently paired Switch (or falling through to initial pairing if none).
+Use `.venv/bin/python` (not `python3`) so the venv's prompt-toolkit /
+hid / crc8 deps are picked up.
 
 Startup options:
 
@@ -292,8 +302,8 @@ Switch.
 
 ### Inspecting paired Switches
 
-`scripts/list_paired_switches.sh` lists paired devices for the default
-adapter, sorted by last-bond timestamp:
+From the project directory, `scripts/list_paired_switches.sh` lists
+paired devices for the default adapter, sorted by last-bond timestamp:
 
 ```bash
 sudo ./scripts/list_paired_switches.sh
