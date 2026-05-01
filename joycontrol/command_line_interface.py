@@ -1,13 +1,36 @@
 import inspect
 import logging
+import os
 import shlex
+from pathlib import Path
 
-from aioconsole import ainput
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.history import FileHistory
+from prompt_toolkit.patch_stdout import patch_stdout
 
 from joycontrol.controller_state import button_push, ControllerState
 from joycontrol.transport import NotConnectedError
 
 logger = logging.getLogger(__name__)
+
+
+def _state_dir() -> Path:
+    base = os.environ.get('JOYCONTROL_STATE_DIR') \
+           or os.environ.get('XDG_STATE_HOME') \
+           or str(Path.home() / '.local' / 'state')
+    p = Path(base) / 'joycontrol'
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _make_session(words):
+    return PromptSession(
+        message='cmd >> ',
+        completer=WordCompleter(sorted(set(words)), ignore_case=True),
+        history=FileHistory(str(_state_dir() / 'cli_history')),
+        complete_while_typing=False,
+    )
 
 
 def _print_doc(string):
@@ -60,34 +83,47 @@ class CLI:
         print('Commands can be chained using "&&"')
         print('Type "exit" to close.')
 
+    def _completion_words(self):
+        words = ['exit', 'help']
+        for name, _ in inspect.getmembers(self):
+            if name.startswith('cmd_'):
+                words.append(name[len('cmd_'):])
+        words.extend(self.commands.keys())
+        return words
+
     async def run(self):
-        while True:
-            user_input = await ainput(prompt='cmd >> ')
-            if not user_input:
-                continue
-
-            for command in user_input.split('&&'):
-                cmd, *args = shlex.split(command)
-
-                if cmd == 'exit':
+        session = _make_session(self._completion_words())
+        with patch_stdout(raw=True):
+            while True:
+                try:
+                    user_input = await session.prompt_async()
+                except (EOFError, KeyboardInterrupt):
                     return
+                if not user_input:
+                    continue
 
-                if hasattr(self, f'cmd_{cmd}'):
-                    try:
-                        result = await getattr(self, f'cmd_{cmd}')(*args)
-                        if result:
-                            print(result)
-                    except Exception as e:
-                        print(e)
-                elif cmd in self.commands:
-                    try:
-                        result = await self.commands[cmd](*args)
-                        if result:
-                            print(result)
-                    except Exception as e:
-                        print(e)
-                else:
-                    print('command', cmd, 'not found, call help for help.')
+                for command in user_input.split('&&'):
+                    cmd, *args = shlex.split(command)
+
+                    if cmd == 'exit':
+                        return
+
+                    if hasattr(self, f'cmd_{cmd}'):
+                        try:
+                            result = await getattr(self, f'cmd_{cmd}')(*args)
+                            if result:
+                                print(result)
+                        except Exception as e:
+                            print(e)
+                    elif cmd in self.commands:
+                        try:
+                            result = await self.commands[cmd](*args)
+                            if result:
+                                print(result)
+                        except Exception as e:
+                            print(e)
+                    else:
+                        print('command', cmd, 'not found, call help for help.')
 
     @staticmethod
     def deprecated(message):
@@ -158,46 +194,59 @@ class ControllerCLI(CLI):
         else:
             raise ValueError('Value of side must be "l", "left" or "r", "right"')
 
+    def _completion_words(self):
+        words = super()._completion_words()
+        words.extend(self.controller_state.button_state.get_available_buttons())
+        # stick command operands
+        words.extend(['stick', 'l', 'r', 'left', 'right',
+                      'center', 'up', 'down', 'h', 'v', 'horizontal', 'vertical'])
+        return words
+
     async def run(self):
-        while True:
-            user_input = await ainput(prompt='cmd >> ')
-            if not user_input:
-                continue
-
-            buttons_to_push = []
-
-            for command in user_input.split('&&'):
-                cmd, *args = shlex.split(command)
-
-                if cmd == 'exit':
-                    return
-
-                available_buttons = self.controller_state.button_state.get_available_buttons()
-
-                if hasattr(self, f'cmd_{cmd}'):
-                    try:
-                        result = await getattr(self, f'cmd_{cmd}')(*args)
-                        if result:
-                            print(result)
-                    except Exception as e:
-                        print(e)
-                elif cmd in self.commands:
-                    try:
-                        result = await self.commands[cmd](*args)
-                        if result:
-                            print(result)
-                    except Exception as e:
-                        print(e)
-                elif cmd in available_buttons:
-                    buttons_to_push.append(cmd)
-                else:
-                    print('command', cmd, 'not found, call help for help.')
-
-            if buttons_to_push:
-                await button_push(self.controller_state, *buttons_to_push)
-            else:
+        session = _make_session(self._completion_words())
+        with patch_stdout(raw=True):
+            while True:
                 try:
-                    await self.controller_state.send()
-                except NotConnectedError:
-                    logger.info('Connection was lost.')
+                    user_input = await session.prompt_async()
+                except (EOFError, KeyboardInterrupt):
                     return
+                if not user_input:
+                    continue
+
+                buttons_to_push = []
+
+                for command in user_input.split('&&'):
+                    cmd, *args = shlex.split(command)
+
+                    if cmd == 'exit':
+                        return
+
+                    available_buttons = self.controller_state.button_state.get_available_buttons()
+
+                    if hasattr(self, f'cmd_{cmd}'):
+                        try:
+                            result = await getattr(self, f'cmd_{cmd}')(*args)
+                            if result:
+                                print(result)
+                        except Exception as e:
+                            print(e)
+                    elif cmd in self.commands:
+                        try:
+                            result = await self.commands[cmd](*args)
+                            if result:
+                                print(result)
+                        except Exception as e:
+                            print(e)
+                    elif cmd in available_buttons:
+                        buttons_to_push.append(cmd)
+                    else:
+                        print('command', cmd, 'not found, call help for help.')
+
+                if buttons_to_push:
+                    await button_push(self.controller_state, *buttons_to_push)
+                else:
+                    try:
+                        await self.controller_state.send()
+                    except NotConnectedError:
+                        logger.info('Connection was lost.')
+                        return

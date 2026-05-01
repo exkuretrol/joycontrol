@@ -1,5 +1,6 @@
 import logging
 import datetime
+import sys
 
 
 def configure(console_level=logging.DEBUG, file_level=logging.DEBUG, logfile_name=None):
@@ -18,8 +19,9 @@ def configure(console_level=logging.DEBUG, file_level=logging.DEBUG, logfile_nam
         "%H:%M:%S"
     )
 
-    # create console logger
-    console_handler = logging.StreamHandler()
+    # Write to stdout so prompt_toolkit's patch_stdout can buffer log output
+    # and render it above the live `cmd >>` prompt instead of breaking it.
+    console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     console_handler.setLevel(console_level)
 

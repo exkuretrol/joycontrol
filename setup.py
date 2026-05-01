@@ -14,6 +14,7 @@ setup(name='joycontrol',
           'hid',
           'aioconsole',
           'crc8',
+          'prompt-toolkit',
           # dbus-python must come from the distro package (python3-dbus) on most
           # systems because it links against system libraries — pip-installing it
           # often fails. We list it here for completeness; install with apt if pip fails.
