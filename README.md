@@ -72,7 +72,7 @@ you'll launch via `sudo .venv/bin/python ...`.
 
 To verify the install:
 ```bash
-sudo python3 -c "import dbus, hid, aioconsole, crc8, prompt_toolkit"
+sudo python3 -c "import dbus, hid, crc8, prompt_toolkit"
 ```
 Should exit silently.
 

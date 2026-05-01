@@ -12,7 +12,6 @@ setup(name='joycontrol',
       python_requires='>=3.9',
       install_requires=[
           'hid',
-          'aioconsole',
           'crc8',
           'prompt-toolkit',
           # dbus-python must come from the distro package (python3-dbus) on most
