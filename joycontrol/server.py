@@ -24,29 +24,75 @@ async def _send_empty_input_reports(transport):
         await asyncio.sleep(1)
 
 
+def _bond_mtime(adapter_addr: str, path: str) -> float:
+    addr = HidDevice.get_address_of_paired_path(path)
+    info_path = f"/var/lib/bluetooth/{adapter_addr}/{addr}/info"
+    try:
+        return os.path.getmtime(info_path)
+    except OSError:
+        return 0.0
+
+
+def _list_paired(hid: HidDevice, adapter_addr: str):
+    """Return paired Switch DBus paths sorted by last-bond mtime, newest first."""
+    return sorted(hid.get_paired_switches(),
+                  key=lambda p: _bond_mtime(adapter_addr, p),
+                  reverse=True)
+
+
+def _print_menu(paths, adapter_addr: str) -> None:
+    print("found the following paired switches, please choose one:")
+    for i, p in enumerate(paths, start=1):
+        mt = _bond_mtime(adapter_addr, p)
+        ts = (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mt))
+              if mt > 0 else "unknown")
+        print(f" {i}: {p}  (last bond: {ts})")
+    print(" n: pair a new Switch")
+    print(" u: unpair a Switch")
+    print(" 0: abort")
+
+
+def _prompt_unpair(hid: HidDevice, paths) -> None:
+    """Ask which entry to unpair, then remove its bond. Tolerant of bad input."""
+    if not paths:
+        return
+    raw = input(f"unpair which? number 1 - {len(paths)} (Enter to cancel): ").strip()
+    if not raw:
+        return
+    try:
+        idx = int(raw)
+    except ValueError:
+        print(f"unrecognized choice {raw!r}, cancelled")
+        return
+    if not 1 <= idx <= len(paths):
+        print(f"choice {idx} out of range, cancelled")
+        return
+    target = paths[idx - 1]
+    addr = HidDevice.get_address_of_paired_path(target)
+    confirm = input(f"remove bond for {addr}? y/N: ").strip().lower()
+    if confirm not in ('y', 'yes'):
+        print("cancelled")
+        return
+    try:
+        hid.unpair_path(target)
+        print(f"unpaired {addr}")
+    except Exception as exc:
+        print(f"failed to unpair {addr}: {exc}")
+
+
 def _resolve_auto(hid: HidDevice, adapter_addr: str, interactive: bool):
     """
     Resolve `-r auto` to either a concrete BD address (reconnect path) or
-    None (fall through to initial pairing). When interactive and at least
-    one Switch is paired, present a menu so the user can pick a paired
-    Switch, pair a new one, or abort.
+    None (fall through to initial pairing). When interactive, present a
+    menu so the user can pick a paired Switch, pair a new one, unpair an
+    existing one, or abort.
 
     :returns BD address string for reconnect, or None for initial pairing.
     """
-    paths = hid.get_paired_switches()
+    paths = _list_paired(hid, adapter_addr)
     if not paths:
         logger.info('no paired Switch found; falling back to initial pairing flow')
         return None
-
-    def bond_mtime(p):
-        addr = HidDevice.get_address_of_paired_path(p)
-        info_path = f"/var/lib/bluetooth/{adapter_addr}/{addr}/info"
-        try:
-            return os.path.getmtime(info_path)
-        except OSError:
-            return 0.0
-
-    paths = sorted(paths, key=bond_mtime, reverse=True)
 
     if not interactive:
         if len(paths) > 1:
@@ -55,33 +101,35 @@ def _resolve_auto(hid: HidDevice, adapter_addr: str, interactive: bool):
             logger.info(f"auto detected paired switch {paths[0]}")
         return HidDevice.get_address_of_paired_path(paths[0])
 
-    print("found the following paired switches, please choose one:")
-    for i, p in enumerate(paths, start=1):
-        mt = bond_mtime(p)
-        ts = (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mt))
-              if mt > 0 else "unknown")
-        print(f" {i}: {p}  (last bond: {ts})")
-    print(" n: pair a new Switch")
-    print(" 0: abort")
-    choice = input(f"number 1 - {len(paths)}, n to pair new, 0 to abort [1]: ").strip().lower()
+    while True:
+        if not paths:
+            logger.info('no paired Switch left; falling back to initial pairing flow')
+            return None
 
-    if choice == '':
-        return HidDevice.get_address_of_paired_path(paths[0])
-    if choice in ('0', 'q'):
-        print("aborted")
-        sys.exit(0)
-    if choice in ('n', 'new'):
-        logger.info('user chose to pair a new Switch; falling through to initial pairing flow')
-        return None
-    try:
-        idx = int(choice)
-    except ValueError:
-        print(f"unrecognized choice {choice!r}, aborting")
-        sys.exit(1)
-    if not 1 <= idx <= len(paths):
-        print(f"choice {idx} out of range, aborting")
-        sys.exit(1)
-    return HidDevice.get_address_of_paired_path(paths[idx - 1])
+        _print_menu(paths, adapter_addr)
+        choice = input(f"number 1 - {len(paths)}, n to pair new, u to unpair, 0 to abort [1]: ").strip().lower()
+
+        if choice == '':
+            return HidDevice.get_address_of_paired_path(paths[0])
+        if choice in ('0', 'q'):
+            print("aborted")
+            sys.exit(0)
+        if choice in ('n', 'new'):
+            logger.info('user chose to pair a new Switch; falling through to initial pairing flow')
+            return None
+        if choice in ('u', 'unpair'):
+            _prompt_unpair(hid, paths)
+            paths = _list_paired(hid, adapter_addr)
+            continue
+        try:
+            idx = int(choice)
+        except ValueError:
+            print(f"unrecognized choice {choice!r}, try again")
+            continue
+        if not 1 <= idx <= len(paths):
+            print(f"choice {idx} out of range, try again")
+            continue
+        return HidDevice.get_address_of_paired_path(paths[idx - 1])
 
 async def create_hid_server(protocol_factory, ctl_psm=17, itr_psm=19, device_id=None, reconnect_bt_addr=None,
                             capture_file=None, interactive=False):
