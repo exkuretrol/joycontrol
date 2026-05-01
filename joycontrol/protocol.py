@@ -489,6 +489,6 @@ class ControllerProtocol(BaseProtocol):
         input_report.set_ack(0x80)
         input_report.reply_to_subcommand_id(SubCommand.SET_PLAYER_LIGHTS.value)
 
-        self._writer_thread = utils.start_asyncio_thread(self._writer())
+        self._writer_thread = utils.start_asyncio_thread(self._writer(), ignore=asyncio.CancelledError)
         self.sig_input_ready.set()
         return input_report
