@@ -32,6 +32,22 @@ Fedora / RHEL / Oracle Linux:
 sudo dnf install python3-dbus hidapi bluez bluez-libs-devel bluez-tools
 ```
 
+`bluez-libs-devel` lives in the CodeReady Builder repo, which is not
+enabled by default. Enable it first if `dnf` can't find the package:
+
+```bash
+# Oracle Linux 10
+sudo dnf config-manager --enable ol10_codeready_builder
+
+# RHEL 10 (with a Red Hat subscription)
+sudo subscription-manager repos --enable codeready-builder-for-rhel-10-x86_64-rpms
+
+# AlmaLinux / Rocky Linux 10
+sudo dnf config-manager --set-enabled crb
+```
+
+Adjust the version number (`ol10_…`, `…rhel-10-…`) for your release.
+
 `bluez-tools` provides `btmgmt`, which is the modern replacement for
 `hciconfig` / `hcitool` and is now the default path used by joycontrol.
 
