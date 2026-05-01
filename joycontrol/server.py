@@ -1,6 +1,9 @@
 import asyncio
 import logging
+import os
 import socket
+import sys
+import time
 from importlib.resources import files
 
 import dbus
@@ -138,12 +141,25 @@ async def create_hid_server(protocol_factory, ctl_psm=17, itr_psm=19, device_id=
                 if interactive:
                     print("found the following paired switches, please choose one:")
                     for i, p in enumerate(paths, start=1):
-                        print(f" {i}: {p}")
-                    choice = input(f"number 1 - {len(paths)} [1]:")
+                        addr = HidDevice.get_address_of_paired_path(p)
+                        info_path = f"/var/lib/bluetooth/{bt_addr}/{addr}/info"
+                        try:
+                            ts = time.strftime(
+                                "%Y-%m-%d %H:%M:%S",
+                                time.localtime(os.path.getmtime(info_path)),
+                            )
+                        except OSError:
+                            ts = "unknown"
+                        print(f" {i}: {p}  (last bond: {ts})")
+                    print(" 0: abort")
+                    choice = input(f"number 1 - {len(paths)}, 0 to abort [1]: ")
                     if not choice:
                         path = paths[0]
+                    elif choice.strip() in ('0', 'q', 'Q'):
+                        print("aborted")
+                        sys.exit(0)
                     else:
-                        path = paths[int(choice)-1]
+                        path = paths[int(choice) - 1]
                 else:
                     path = paths[0]
                     logger.warning(f"Automatic reconnect address chose {path} out of {paths}")
