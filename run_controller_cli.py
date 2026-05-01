@@ -353,7 +353,8 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('controller', nargs='?', default='PRO_CONTROLLER',
-                        help='JOYCON_R, JOYCON_L or PRO_CONTROLLER (default: PRO_CONTROLLER)')
+                        choices=[c.name for c in Controller],
+                        help='controller type to emulate')
     parser.add_argument('-l', '--log', help="BT-communication logfile output")
     parser.add_argument('-d', '--device_id', help='not fully working yet, the BT-adapter to use')
     parser.add_argument('--spi_flash', help="controller SPI-memory dump to use")
