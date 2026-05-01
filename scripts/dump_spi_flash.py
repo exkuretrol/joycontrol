@@ -161,15 +161,14 @@ if __name__ == '__main__':
     # setup logging
     log.configure()
 
-    loop = asyncio.get_event_loop()
-    task = asyncio.ensure_future(_main(args, loop))
+    async def _runner():
+        loop = asyncio.get_running_loop()
+        task = asyncio.ensure_future(_main(args, loop))
+        try:
+            await task
+        except KeyboardInterrupt:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
-    try:
-        loop.run_until_complete(task)
-    except KeyboardInterrupt:
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            loop.run_until_complete(task)
-    finally:
-        loop.stop()
-        loop.close()
+    asyncio.run(_runner())

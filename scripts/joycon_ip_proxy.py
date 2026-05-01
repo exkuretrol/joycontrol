@@ -37,16 +37,16 @@ async def send_from_queue(queue, dst, printd=False):
 
 def read_from_sock(sock):
     async def internal():
-        return await asyncio.get_event_loop().sock_recv(sock, 500)
+        return await asyncio.get_running_loop().sock_recv(sock, 500)
     return internal
 
 def write_to_sock(sock):
     async def internal(data):
-        return await asyncio.get_event_loop().sock_sendall(sock, data)
+        return await asyncio.get_running_loop().sock_sendall(sock, data)
     return internal
 
 async def connect_bt(bt_addr):
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     ctl = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
     itr = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
 
@@ -66,7 +66,7 @@ async def connect_bt(bt_addr):
     return ctl, itr
 
 async def accept_bt():
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     ctl_srv = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
     itr_srv = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
@@ -157,7 +157,7 @@ async def connectEth(eth, server=False):
     ip, port = eth.split(':')
     port = int(port)
 
-    t, p = await asyncio.get_event_loop().create_datagram_endpoint(lambda: NoDatagramProtocol((ip, port)), local_addr=('0.0.0.0', port), remote_addr=(ip, port))
+    t, p = await asyncio.get_running_loop().create_datagram_endpoint(lambda: NoDatagramProtocol((ip, port)), local_addr=('0.0.0.0', port), remote_addr=(ip, port))
 
     # replaces the syn-ack handshake with just sending a single packet to test the
     # connection beforehand
@@ -169,7 +169,7 @@ async def connectEth(eth, server=False):
     return p.read, p.write, t.close
 
 async def _main(sw_addr, jc_addr, buffer=10):
-    # loop = asyncio.get_event_loop()
+    # loop = asyncio.get_running_loop()
 
     jc_eth = not re.match("([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", jc_addr)
     sw_eth = not re.match("([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", sw_addr)

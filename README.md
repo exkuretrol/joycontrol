@@ -13,17 +13,32 @@ Emulation of JOYCON_R, JOYCON_L and PRO_CONTROLLER. Able to send:
 - nfc for amiibo read & owner registration
 
 ## Installation
-- Install dependencies  
-  Raspbian:
+
+Tested on Python 3.9+ and BlueZ 5.55+. The legacy `hciconfig`/`hcitool` tools
+are deprecated on modern distributions; this project now prefers `btmgmt`
+(part of `bluez-tools`) and falls back to the legacy tools only when present.
+
+- Install dependencies
+  Raspbian / Debian / Ubuntu:
 ```bash
-sudo apt install python3-dbus libhidapi-hidraw0 libbluetooth-dev bluez
+sudo apt install python3-dbus python3-hid libhidapi-hidraw0 libbluetooth-dev bluez bluez-tools
 ```
-  Python: (a setup.py is present but not yet up to date)  
-  Note that pip here _has_ to be run as root, as otherwise the packages are not available to the root user.
+  Note: `bluez-tools` provides `btmgmt`. On distributions that no longer ship
+  `hciconfig`/`hcitool` (e.g. recent Debian/Ubuntu where `bluez` no longer
+  installs the legacy CLI by default) `btmgmt` is the modern replacement.
+
+  Python:
 ```bash
 sudo pip3 install aioconsole hid crc8
 ```
- If you are unsure if the packages are properly installed, try running `sudo python3` and import each using `import package_name`.
+  Or install the project (and its Python deps) directly with:
+```bash
+sudo pip3 install .
+```
+  Note that pip here _has_ to be run as root so the packages are available to
+  the root user (the script must run as root to access raw L2CAP sockets).
+  If you are unsure if the packages are properly installed, try running
+  `sudo python3` and import each using `import package_name`.
 
 - setup bluetooth
   - [I shouldn't have to say this, but] make sure you have a working Bluetooth adapter\

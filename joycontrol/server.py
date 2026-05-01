@@ -1,16 +1,16 @@
 import asyncio
 import logging
 import socket
+from importlib.resources import files
 
 import dbus
-import pkg_resources
 
 from joycontrol import utils
 from joycontrol.device import HidDevice
 from joycontrol.report import InputReport
 from joycontrol.transport import L2CAP_Transport
 
-PROFILE_PATH = pkg_resources.resource_filename('joycontrol', 'profile/sdp_record_hid.xml')
+PROFILE_PATH = str(files('joycontrol').joinpath('profile/sdp_record_hid.xml'))
 logger = logging.getLogger(__name__)
 
 
@@ -116,7 +116,7 @@ async def create_hid_server(protocol_factory, ctl_psm=17, itr_psm=19, device_id=
 
         logger.info('Waiting for Switch to connect... Please open the "Change Grip/Order" menu.')
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         client_ctl, ctl_address = await loop.sock_accept(ctl_sock)
         logger.info(f'Accepted connection at psm {ctl_psm} from {ctl_address}')
         client_itr, itr_address = await loop.sock_accept(itr_sock)
@@ -168,7 +168,7 @@ async def create_hid_server(protocol_factory, ctl_psm=17, itr_psm=19, device_id=
     client_ctl.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 0)
     client_itr.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 0)
     # create transport for the established connection and activate the HID protocol
-    transport = L2CAP_Transport(asyncio.get_event_loop(), protocol, client_itr, client_ctl, 50, capture_file=capture_file)
+    transport = L2CAP_Transport(asyncio.get_running_loop(), protocol, client_itr, client_ctl, 50, capture_file=capture_file)
     protocol.connection_made(transport)
 
     # HACK: send some empty input reports until the Switch decides to reply

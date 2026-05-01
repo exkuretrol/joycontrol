@@ -1,4 +1,5 @@
 import logging
+import shutil
 import uuid
 import dbus
 
@@ -9,6 +10,10 @@ logger = logging.getLogger(__name__)
 
 HID_UUID = '00001124-0000-1000-8000-00805f9b34fb'
 HID_PATH = '/bluez/switch/hid'
+
+
+def _has_cmd(name: str) -> bool:
+    return shutil.which(name) is not None
 
 
 class HidDevice:
@@ -44,20 +49,49 @@ class HidDevice:
         print(f"Attempting to change the bluetooth MAC to {bt_addr}")
         print("please choose your method:")
         print("\t1: bdaddr - ericson, csr, TI, broadcom, zeevo, st")
-        print("\t2: hcitool - intel chipsets")
-        print("\t3: hcitool - cypress (raspberri pi 3B+ & 4B)")
-        print("\tx: abort, dont't change")
+        print("\t2: btmgmt public-addr - intel chipsets / modern drivers")
+        print("\t3: hcitool/raw HCI - cypress (raspberry pi 3B+ & 4B)")
+        print("\tx: abort, don't change")
         hci_version = " ".join(reversed(list(map(lambda h: '0x' + h, bt_addr.split(":")))))
+        adapter_idx = self._adapter_name.replace('hci', '')
         c = input()
         if c == '1':
+            if not _has_cmd('bdaddr'):
+                logger.error("bdaddr utility not found. Install it from your distro's bluez-tools or build from source.")
+                return False
             await utils.run_system_command(f'bdaddr -i {self._adapter_name} {bt_addr}')
         elif c == '2':
-            await utils.run_system_command(f'hcitool cmd 0x3f 0x0031 {hci_version}')
+            # Modern: btmgmt public-addr replaces the vendor HCI command for Intel chipsets
+            if _has_cmd('btmgmt'):
+                await utils.run_system_command(f'btmgmt --index {adapter_idx} public-addr {bt_addr}')
+            elif _has_cmd('hcitool'):
+                logger.warning('btmgmt not found, falling back to deprecated hcitool')
+                await utils.run_system_command(f'hcitool cmd 0x3f 0x0031 {hci_version}')
+            else:
+                logger.error('Neither btmgmt nor hcitool is available')
+                return False
         elif c == '3':
-            await utils.run_system_command(f'hcitool cmd 0x3f 0x001 {hci_version}')
+            # Cypress vendor command 0xfc01 — no btmgmt equivalent. Try hcitool, else raw HCI socket.
+            if _has_cmd('hcitool'):
+                await utils.run_system_command(f'hcitool cmd 0x3f 0x001 {hci_version}')
+            else:
+                logger.warning('hcitool not found, sending vendor HCI command via raw socket')
+                payload = bytes(int(b, 16) for b in reversed(bt_addr.split(':')))
+                await utils.hci_send_cmd(int(adapter_idx or 0), ogf=0x3f, ocf=0x001, data=payload)
         else:
             return False
-        await utils.run_system_command("hciconfig hci0 reset")
+
+        # Reset the adapter. btmgmt is the modern replacement for `hciconfig hci0 reset`.
+        if _has_cmd('btmgmt'):
+            await utils.run_system_command(f'btmgmt --index {adapter_idx} power off')
+            await utils.run_system_command(f'btmgmt --index {adapter_idx} power on')
+        elif _has_cmd('hciconfig'):
+            logger.warning('btmgmt not found, falling back to deprecated hciconfig for adapter reset')
+            await utils.run_system_command(f'hciconfig {self._adapter_name} reset')
+        else:
+            logger.warning('Neither btmgmt nor hciconfig found, attempting reset via DBus')
+            self.powered(False)
+            self.powered(True)
         await utils.run_system_command("systemctl restart bluetooth.service")
 
         # now we have to reget all dbus-shenanigans because we just restarted it's service.
@@ -98,13 +132,39 @@ class HidDevice:
 
     async def set_class(self, cls='0x002508'):
         """
-        Sets Bluetooth device class. Requires hciconfig system command.
+        Sets Bluetooth device class. Prefers btmgmt (modern bluez-tools);
+        falls back to the deprecated hciconfig if needed.
         :param cls: default 0x002508 (Gamepad/joystick device class)
         """
         logger.info(f'setting device class to {cls}...')
-        await utils.run_system_command(f'hciconfig {self._adapter_name} class {cls}')
-        if self.properties.Get(self.adapter.dbus_interface, "Class") != int(cls, base=0):
-            logger.error(f"Could not set class to the required {cls}. Connecting probably won't work.")
+        cls_int = int(cls, base=0)
+        adapter_idx = self._adapter_name.replace('hci', '')
+        # Decompose 24-bit class. btmgmt sets bits 0-12 (minor byte + major 5-bit).
+        # Service class bits 13-23 are derived by bluez from registered profiles
+        # and discoverability state, so we can't set them directly via btmgmt.
+        minor = cls_int & 0xFF
+        major = (cls_int >> 8) & 0x1F
+
+        used_btmgmt = False
+        if _has_cmd('btmgmt'):
+            rc, _, _ = await utils.run_system_command(f'btmgmt --index {adapter_idx} class {major} {minor}')
+            used_btmgmt = (rc == 0)
+        if not used_btmgmt:
+            if _has_cmd('hciconfig'):
+                logger.warning('btmgmt unavailable or failed; falling back to deprecated hciconfig')
+                await utils.run_system_command(f'hciconfig {self._adapter_name} class {cls}')
+            else:
+                logger.error('Neither btmgmt nor hciconfig is available; cannot set device class.')
+                return
+
+        actual = self.properties.Get(self.adapter.dbus_interface, "Class")
+        if actual != cls_int:
+            # Service-class bits often differ when set via btmgmt; only the device-class
+            # portion (bits 0-12) is required for the Switch to recognize the controller.
+            if (actual & 0x1FFF) == (cls_int & 0x1FFF):
+                logger.debug(f"device class set to {hex(actual)} (service bits differ from {cls}, this is expected)")
+            else:
+                logger.error(f"Could not set class to the required {cls}. Connecting probably won't work.")
 
     async def set_name(self, name: str):
         """

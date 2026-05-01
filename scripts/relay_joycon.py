@@ -26,7 +26,7 @@ class Relay:
         self._capture_file = capture_file
 
     async def relay_input(self, hid_device, client_itr):
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         while True:
             data = await hid_device.read(100)
@@ -43,7 +43,7 @@ class Relay:
             await asyncio.sleep(0)
 
     async def relay_output(self, hid_device, client_itr):
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         while True:
             data = await loop.sock_recv(client_itr, 50)
@@ -82,7 +82,7 @@ async def get_hid_controller():
 
 
 async def _main(capture_file=None, reconnect_bt_addr=None):
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     if reconnect_bt_addr == None:
         # Creating l2cap sockets, we have to do this before restarting bluetooth
@@ -174,8 +174,7 @@ if __name__ == '__main__':
     log.configure()
 
     with utils.get_output(args.log, default=None) as capture_file:
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(
+        asyncio.run(
             _main(capture_file=capture_file, reconnect_bt_addr=args.reconnect_bt_addr)
         )
 

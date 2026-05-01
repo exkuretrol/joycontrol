@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import socket
+import struct
 from contextlib import contextmanager
 
 import hid
@@ -8,9 +10,9 @@ logger = logging.getLogger(__name__)
 
 
 class AsyncHID(hid.Device):
-    def __init__(self, *args, loop=asyncio.get_event_loop(), **kwargs):
+    def __init__(self, *args, loop=None, **kwargs):
         super().__init__(*args, **kwargs)
-        self._loop = loop
+        self._loop = loop if loop is not None else asyncio.get_running_loop()
 
         self._write_lock = asyncio.Lock()
         self._read_lock = asyncio.Lock()
@@ -95,14 +97,24 @@ async def aio_chain(*args):
     for a in args:
         await a
 
-"""
-async def get_bt_mac_address(dev=0):
-    ret, stdout, stderr = await run_system_command(f'hciconfig hci{dev}')
-    # TODO: Process error handling
-
-    match = re.search(r'BD Address: (?P<mac>\w\w:\w\w:\w\w:\w\w:\w\w:\w\w)', stdout.decode('UTF-8'))
-    if match:
-        return list(map(lambda x: int(x, 16), match.group('mac').split(':')))
-    else:
-        raise ValueError(f'BD Address not found in "{stdout}"')
-"""
+async def hci_send_cmd(adapter_index: int, ogf: int, ocf: int, data: bytes = b'') -> None:
+    """
+    Send a raw HCI command via an HCI raw socket. Modern alternative to `hcitool cmd`
+    when bluez-tools are not installed. Fire-and-forget — does not parse the event response.
+    Requires root and the bluetooth kernel module loaded.
+    :param adapter_index: integer adapter index (0 for hci0)
+    :param ogf: OpCode Group Field (6 bits)
+    :param ocf: OpCode Command Field (10 bits)
+    :param data: command parameters
+    """
+    loop = asyncio.get_running_loop()
+    sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_RAW, socket.BTPROTO_HCI)
+    try:
+        sock.setblocking(False)
+        await loop.run_in_executor(None, sock.bind, (adapter_index,))
+        opcode = ((ogf & 0x3F) << 10) | (ocf & 0x3FF)
+        # HCI command packet: type=0x01 | opcode (LE) | param_len | params
+        pkt = struct.pack('<BHB', 0x01, opcode, len(data)) + data
+        await loop.sock_sendall(sock, pkt)
+    finally:
+        sock.close()
