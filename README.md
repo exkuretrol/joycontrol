@@ -14,60 +14,125 @@ Emulation of JOYCON_R, JOYCON_L and PRO_CONTROLLER. Able to send:
 
 ## Installation
 
-Tested on Python 3.9+ and BlueZ 5.55+. The legacy `hciconfig`/`hcitool` tools
-are deprecated on modern distributions; this project now prefers `btmgmt`
-(part of `bluez-tools`) and falls back to the legacy tools only when present.
+Tested on Python 3.9+ and BlueZ 5.55+ (verified on Raspbian and Oracle
+Linux 10 with Python 3.12 / BlueZ 5.83). The legacy `hciconfig` /
+`hcitool` tools are deprecated on modern distributions; this project
+prefers `btmgmt` (part of `bluez-tools`) and falls back to the legacy
+tools only when present.
 
-- Install dependencies
-  Raspbian / Debian / Ubuntu:
-```bash
-sudo apt install python3-dbus python3-hid libhidapi-hidraw0 libbluetooth-dev bluez bluez-tools
-```
-  Note: `bluez-tools` provides `btmgmt`. On distributions that no longer ship
-  `hciconfig`/`hcitool` (e.g. recent Debian/Ubuntu where `bluez` no longer
-  installs the legacy CLI by default) `btmgmt` is the modern replacement.
+### System packages
 
-  Python:
+Debian / Ubuntu / Raspbian:
 ```bash
-sudo pip3 install aioconsole hid crc8
+sudo apt install python3-dbus libhidapi-hidraw0 libbluetooth-dev bluez bluez-tools
 ```
-  Or install the project (and its Python deps) directly with:
+
+Fedora / RHEL / Oracle Linux:
+```bash
+sudo dnf install python3-dbus hidapi bluez bluez-libs-devel bluez-tools
+```
+
+`bluez-tools` provides `btmgmt`, which is the modern replacement for
+`hciconfig` / `hcitool` and is now the default path used by joycontrol.
+
+### Python packages
+
+Easiest — install the project (which pulls in all Python deps) directly:
+
 ```bash
 sudo pip3 install .
 ```
-  Note that pip here _has_ to be run as root so the packages are available to
-  the root user (the script must run as root to access raw L2CAP sockets).
-  If you are unsure if the packages are properly installed, try running
-  `sudo python3` and import each using `import package_name`.
 
-- setup bluetooth
-  - [I shouldn't have to say this, but] make sure you have a working Bluetooth adapter\
-  If you are running inside a VM, the PC might but not the VM. Check for a controller using `bluetoothctl show` or `bluetoothctl list`. Also a good indicator it the actual os reporting to not have bluetooth anymore.
-  - disable SDP [only necessary when pairing]\
-  change the `ExecStart` parameter in `/lib/systemd/system/bluetooth.service` to `ExecStart=/usr/lib/bluetooth/bluetoothd -C -P sap,input,avrcp`.\
-  This is to remove the additional reported features as the switch only looks for a controller.\
-  This also breaks all other Bluetooth gadgets, as this also disabled the needed drivers.
-  - disable input plugin [experimental alternative to above when not pairing]\
-  When not pairing, you can get away with only disabling the `input` plugin, only breaking bluetooth-input devices on your PC. Do so by changing `ExecStart` to `ExecStart=/usr/lib/bluetooth/bluetoothd -C -P input` instead.
-  - Restart bluetooth-deamon to apply the changes:
-  ```bash
-    sudo systemctl daemon-reload
-    sudo systemctl restart bluetooth.service
-  ```
-  - see [Issue #4](https://github.com/Poohl/joycontrol/issues/4) if despite that the switch doesn't connect or disconnects randomly.
+A project-local venv is fine too:
+
+```bash
+python3 -m venv .venv
+sudo .venv/bin/pip install .
+```
+
+joycontrol must run as root (raw L2CAP sockets), so install where the
+root user can find the packages — either system-wide or in a venv that
+you'll launch via `sudo .venv/bin/python ...`.
+
+To verify the install:
+```bash
+sudo python3 -c "import dbus, hid, aioconsole, crc8, prompt_toolkit"
+```
+Should exit silently.
+
+## Bluetooth service setup
+
+The Switch refuses to connect if the adapter advertises non-controller
+profiles like AVRCP — you need to disable the `input`, `sap`, and
+`avrcp` plugins on `bluetoothd`. The maintainable way is a systemd
+drop-in (won't be clobbered by package upgrades):
+
+```bash
+sudo mkdir -p /etc/systemd/system/bluetooth.service.d
+sudo tee /etc/systemd/system/bluetooth.service.d/override.conf >/dev/null <<'EOF'
+[Service]
+ExecStart=
+ExecStart=/usr/libexec/bluetooth/bluetoothd -C -P sap,input,avrcp
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart bluetooth.service
+```
+
+The `bluetoothd` binary path differs by distro:
+- `/usr/libexec/bluetooth/bluetoothd` — Fedora / RHEL family
+- `/usr/lib/bluetooth/bluetoothd`     — Debian / Ubuntu / Raspbian
+
+Check yours and adjust the override if needed:
+```bash
+systemctl cat bluetooth.service | grep -m1 ExecStart=/usr
+```
+
+Verify the right flags are in effect:
+```bash
+ps -ef | grep bluetoothd
+# ... /usr/libexec/bluetooth/bluetoothd -C -P sap,input,avrcp
+```
+
+### What this breaks (host-wide)
+- `input` — disables Bluetooth keyboards / mice / joysticks on this host.
+- `sap`   — SIM Access Profile (rarely used).
+- `avrcp` — media remote control (e.g. play/pause from BT headphones).
+
+For *reconnecting* to an already-paired Switch you can sometimes get
+away with only disabling `input`, but **initial pairing** needs all
+three or the Switch sees too many SDP records and refuses (see
+[Issue #4](https://github.com/Poohl/joycontrol/issues/4)).
+
+### Make sure the adapter actually exists
+
+If running in a VM, the host might have Bluetooth but the VM might
+not. Confirm with `bluetoothctl show` — you want to see a `Controller`
+line with a real BD address.
 
 ## Command line interface example
-There is a simple CLI (`sudo python3 run_controller_cli.py`) provided with this app. Startup-options are:
+
+A simple CLI lives in `run_controller_cli.py`. Bare invocation:
+
+```bash
+sudo python3 run_controller_cli.py
+```
+
+…defaults to emulating a Pro Controller and reconnecting to your most
+recently paired Switch (or falling through to initial pairing if none).
+
+Startup options:
+
 ```
 usage: run_controller_cli.py [-h] [-l LOG] [-d DEVICE_ID]
                              [--spi_flash SPI_FLASH] [-r RECONNECT_BT_ADDR]
                              [--nfc NFC]
-                             controller
+                             [{JOYCON_L,JOYCON_R,PRO_CONTROLLER}]
 
 positional arguments:
-  controller            JOYCON_R, JOYCON_L or PRO_CONTROLLER
+  {JOYCON_L,JOYCON_R,PRO_CONTROLLER}
+                        controller type to emulate (default: PRO_CONTROLLER)
 
-optional arguments:
+options:
   -h, --help            show this help message and exit
   -l LOG, --log LOG     BT-communication logfile output
   -d DEVICE_ID, --device_id DEVICE_ID
@@ -75,31 +140,66 @@ optional arguments:
   --spi_flash SPI_FLASH
                         controller SPI-memory dump to use
   -r RECONNECT_BT_ADDR, --reconnect_bt_addr RECONNECT_BT_ADDR
-                        The Switch console Bluetooth address (or "auto" for
-                        automatic detection), for reconnecting as an already
-                        paired controller.
-  --nfc NFC             amiibo dump placed on the controller. Equivalent to
-                        the nfc command.
-
+                        Switch BD address, "auto" (the default) for picker,
+                        or "" / "none" to force initial pairing
+  --nfc NFC             amiibo dump placed on the controller (same as the
+                        in-prompt `nfc` command)
 ```
 
-To use the script:
-- start it (this is a minimal example)
+### Pairing / reconnecting
+
+When at least one Switch is already paired, the script presents an
+interactive picker:
+
+```
+found the following paired switches, please choose one:
+ 1: /org/bluez/hci0/dev_AA_AA_AA_AA_AA_AA  (last bond: 2026-05-01 16:36:48)
+ 2: /org/bluez/hci0/dev_BB_BB_BB_BB_BB_BB  (last bond: 2026-05-01 14:31:04)
+ n: pair a new Switch
+ u: unpair a Switch
+ 0: abort
+number 1 - 2, n to pair new, u to unpair, 0 to abort [1]:
+```
+
+| Input          | Result                                                               |
+|----------------|----------------------------------------------------------------------|
+| Enter          | reconnect to the most-recently bonded Switch (option 1)              |
+| `1`–`N`        | reconnect to that entry                                              |
+| `n` / `new`    | initial-pairing flow — open *Change Grip/Order* on the Switch        |
+| `u` / `unpair` | pick a Switch to forget (with `y/N` confirm), menu reflows           |
+| `0` / `q`      | exit cleanly                                                         |
+
+To bypass the picker entirely:
+- `-r 04:03:D6:8F:08:B5` — reconnect to that specific BD address
+- `-r ""` or `-r none`   — force initial pairing even if other Switches are paired
+
+If no Switch is paired yet, the picker is skipped and the script goes
+straight to the initial-pairing flow — open *Change Grip/Order* on the
+Switch.
+
+### Inspecting paired Switches
+
+`scripts/list_paired_switches.sh` lists paired devices for the default
+adapter, sorted by last-bond timestamp:
+
 ```bash
-sudo python3 run_controller_cli.py PRO_CONTROLLER
+sudo ./scripts/list_paired_switches.sh
+# 04:03:D6:8F:08:B5  Nintendo Switch       2026-05-01 16:36:48
 ```
-- The cli does sanity checks on startup, you might get promps telling you they failed. Check the command-line options and your setup in this case. (Note: not the logging messages). You can however still try to proceed, sometimes it works despite the warnings.
 
-- Afterwards a PRO_CONTROLLER instance waiting for the Switch to connect is created.
+### Inside the prompt
 
-- If you didn't pass the `-r` option, Open the "Change Grip/Order" menu of the Switch and wait for it to pair.
+Once connected, a `cmd >>` prompt opens with:
 
-- If you already connected the emulated controller once, you can use the reconnect option of the script (`-r <Switch Bluetooth Mac address>`). Don't open the "Change Grip/Order" menu in this case, just make sure the switch is turned on. You can find out a paired mac address using the `bluetoothctl paired-devices` system command or pass `-r auto` as address for automatic detection.
+- **Tab** — completes commands and button names.
+- **↑ / ↓** — recalls previous commands (persisted at
+  `~/.local/state/joycontrol/cli_history`, overridable via
+  `$JOYCONTROL_STATE_DIR` or `$XDG_STATE_HOME`).
+- Logs render *above* the prompt without disturbing your input.
+- **Ctrl-D** / **Ctrl-C** / `exit` exit cleanly.
 
-- After connecting, a command line interface is opened.  
-  Note: Press \<enter> if you don't see a prompt.
-
-  Call "help" to see a list of available commands.
+Type `help` for the full command list (button names, `stick`, `mash`,
+`hold`/`release`, `nfc`, `pause`/`unpause`, etc.).
 
 ## API
 
@@ -127,9 +227,9 @@ await controller_state.send()
 ```
 
 ## Issues
-- Some bluetooth adapters seem to cause disconnects for reasons unknown, try to use an usb adapter or a raspi instead.
-- Incompatibility with Bluetooth "input" plugin requires it to be disabled (along with the others), see [Issue #8](https://github.com/mart1nro/joycontrol/issues/8)
-- The reconnect doesn't ever connect, `bluetoothctl` shows the connection constantly turning on and off. This means the switch tries initial pairing, you have to unpair the switch and try without the `-r` option again.
+- Some Bluetooth adapters cause disconnects for reasons unknown — try a USB adapter or a Raspberry Pi instead.
+- Incompatibility with Bluetooth "input" plugin (and `sap` / `avrcp` for initial pairing) requires them to be disabled — see the *Bluetooth service setup* section above and [Issue #8](https://github.com/mart1nro/joycontrol/issues/8).
+- Reconnect spins (`bluetoothctl` shows the connection bouncing on/off) usually means the Switch lost its bond key but the host still has one. Use the `u` / unpair option in the picker to forget the host's bond, then pick `n` to pair fresh.
 - ...
 
 ## Thanks
