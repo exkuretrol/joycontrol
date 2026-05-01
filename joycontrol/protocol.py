@@ -171,7 +171,16 @@ class ControllerProtocol(BaseProtocol):
             input_report = self._generate_input_report()
             try:
                 await self._write(input_report)
-            except:
+            except asyncio.CancelledError:
+                # Propagate cancellation; on Python 3.8+ CancelledError derives
+                # from BaseException and must not be silently swallowed.
+                logger.info("writer cancelled")
+                raise
+            except NotConnectedError as exc:
+                logger.info(f"writer: transport not connected ({exc}), exiting")
+                break
+            except Exception:
+                logger.exception("writer: unexpected error during _write, exiting")
                 break
             # calculate delay
             self.send_delay = debug.get_delay(self.send_delay) #debug hook
@@ -263,8 +272,13 @@ class ControllerProtocol(BaseProtocol):
             asyncio.ensure_future(self.transport.close())
             self.transport = None
 
-            if self._controller_state_sender is not None:
-                self._controller_state_sender.set_exception(NotConnectedError)
+            sender = self._controller_state_sender
+            if sender is not None and not sender.done():
+                # On Python 3.10+, asyncio.Task.set_exception() was disallowed
+                # ("Task does not support set_exception operation"). _controller_state_sender
+                # is now a Future created via loop.create_future() in send_controller_state(),
+                # which still supports set_exception().
+                sender.set_exception(NotConnectedError())
 
     def error_received(self, exc: Exception) -> None:
         # TODO?
@@ -315,10 +329,33 @@ class ControllerProtocol(BaseProtocol):
         else:
             self._controller_state.sig_is_send.clear()
 
-            # wrap into a future to be able to set an exception in case of a disconnect
-            self._controller_state_sender = asyncio.ensure_future(self._controller_state.sig_is_send.wait())
-            await self._controller_state_sender
-            self._controller_state_sender = None
+            # Use a plain Future (not a Task) so connection_lost() can call
+            # set_exception() on it. Drive it from a helper task that waits on
+            # the sig_is_send event.
+            loop = asyncio.get_running_loop()
+            self._controller_state_sender = loop.create_future()
+            sender = self._controller_state_sender
+            waiter = asyncio.ensure_future(self._controller_state.sig_is_send.wait())
+
+            def _on_signaled(_task: asyncio.Task) -> None:
+                if sender.done():
+                    return
+                if _task.cancelled():
+                    sender.cancel()
+                    return
+                exc = _task.exception()
+                if exc is not None:
+                    sender.set_exception(exc)
+                else:
+                    sender.set_result(None)
+
+            waiter.add_done_callback(_on_signaled)
+            try:
+                await sender
+            finally:
+                if not waiter.done():
+                    waiter.cancel()
+                self._controller_state_sender = None
 
     async def wait_for_output_report(self):
         """
