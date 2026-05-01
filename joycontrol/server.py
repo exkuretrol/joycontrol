@@ -123,22 +123,18 @@ async def create_hid_server(protocol_factory, ctl_psm=17, itr_psm=19, device_id=
             reconnect_bt_addr = _resolve_auto(hid, bt_addr, interactive)
 
     if reconnect_bt_addr is None:
+        # The user has already made the connect-vs-pair choice (either via
+        # `-r <addr>` / `-r auto` picker, or by passing `-r none`). Don't
+        # prompt to unpair existing bonds — pairing a new Switch should not
+        # disturb other Switches the host is already bonded to.
         if interactive:
             if len(hid.get_UUIDs()) > 3:
-                print("too many SPD-records active, Switch might refuse connection.")
-                print("try modifieing /lib/systemd/system/bluetooth.service and see")
+                print("too many SDP records active, Switch might refuse connection.")
+                print("try modifying /lib/systemd/system/bluetooth.service and see")
                 print("https://github.com/Poohl/joycontrol/issues/4 if it doesn't work")
-            for sw in hid.get_paired_switches():
-                print(f"Warning: a switch ({sw}) was found paired, do you want to unpair it?")
-                i = input("y/n [y]: ")
-                if i == '' or i == 'y' or i == 'Y':
-                    hid.unpair_path(sw)
         else:
             if len(hid.get_UUIDs()) > 3:
-                logger.warning("detected too many SDP-records. Switch might refuse connection.")
-            b = hid.get_paired_switches()
-            if b:
-                logger.warning(f"Attempting initial pairing, but switches are paired: {b}")
+                logger.warning("detected too many SDP records. Switch might refuse connection.")
 
         ctl_sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
         itr_sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
