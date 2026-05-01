@@ -29,8 +29,11 @@ sudo apt install python3-dbus libhidapi-hidraw0 libbluetooth-dev bluez bluez-too
 
 Fedora / RHEL / Oracle Linux:
 ```bash
-sudo dnf install python3-dbus hidapi bluez bluez-libs-devel bluez-tools
+sudo dnf install python3-dbus hidapi bluez bluez-libs-devel
 ```
+
+On RHEL-family distros `btmgmt` ships *inside* the main `bluez` package,
+so there's no separate `bluez-tools`.
 
 `bluez-libs-devel` lives in the CodeReady Builder repo, which is not
 enabled by default. Enable it first if `dnf` can't find the package:
@@ -48,31 +51,39 @@ sudo dnf config-manager --set-enabled crb
 
 Adjust the version number (`ol10_…`, `…rhel-10-…`) for your release.
 
-`bluez-tools` provides `btmgmt`, which is the modern replacement for
-`hciconfig` / `hcitool` and is now the default path used by joycontrol.
+On Debian/Ubuntu, `btmgmt` is shipped as the separate `bluez-tools`
+package (already in the apt line above). Either way, joycontrol's
+modernized adapter code uses `btmgmt` as the default replacement for
+the deprecated `hciconfig` / `hcitool`.
 
 ### Python packages
 
-Easiest — install the project (which pulls in all Python deps) directly:
+joycontrol uses `python3-dbus` from the distro (it links against
+system libraries — pip-building it from source is painful and needs a
+C toolchain plus dbus/glib headers). The recommended setup is a
+project-local venv that inherits the system's dbus binding:
+
+```bash
+python3 -m venv --system-site-packages .venv
+sudo .venv/bin/pip install .
+```
+
+`--system-site-packages` is what makes the system `python3-dbus`
+visible inside the venv. Without it, `import dbus` will fail.
+
+If you'd rather install system-wide (no venv):
 
 ```bash
 sudo pip3 install .
 ```
 
-A project-local venv is fine too:
-
-```bash
-python3 -m venv .venv
-sudo .venv/bin/pip install .
-```
-
 joycontrol must run as root (raw L2CAP sockets), so install where the
-root user can find the packages — either system-wide or in a venv that
-you'll launch via `sudo .venv/bin/python ...`.
+root user can find the packages — either system-wide or in a venv
+that you'll launch via `sudo .venv/bin/python ...`.
 
 To verify the install:
 ```bash
-sudo python3 -c "import dbus, hid, crc8, prompt_toolkit"
+sudo .venv/bin/python -c "import dbus, hid, crc8, prompt_toolkit"
 ```
 Should exit silently.
 

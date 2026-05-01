@@ -14,9 +14,11 @@ setup(name='joycontrol',
           'hid',
           'crc8',
           'prompt-toolkit',
-          # dbus-python must come from the distro package (python3-dbus) on most
-          # systems because it links against system libraries — pip-installing it
-          # often fails. We list it here for completeness; install with apt if pip fails.
-          'dbus-python',
+          # NOTE: dbus-python is intentionally NOT listed here. It links
+          # against system libraries and pip-building it from source needs
+          # a C toolchain plus dbus-devel/glib-devel headers, which is
+          # painful to set up in a venv. Use the distro package
+          # (`python3-dbus` on apt, `python3-dbus` on dnf) and create the
+          # project venv with `--system-site-packages` so it's visible.
       ]
       )
